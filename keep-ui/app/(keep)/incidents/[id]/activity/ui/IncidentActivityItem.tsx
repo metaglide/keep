@@ -1,66 +1,51 @@
 import AlertSeverity from "@/app/(keep)/alerts/alert-severity";
 import { AlertDto } from "@/entities/alerts/model";
+import { useUsers } from "@/entities/users/model/useUsers";
 import TimeAgo from "react-timeago";
-
-// Function to format comment text with styled mentions
-const formatCommentWithMentions = (text: string) => {
-  if (!text) return null;
-  
-  // Regular expression to find @mentions
-  const mentionRegex = /@([a-zA-Z0-9_\.]+)/g;
-  
-  // Split the text by mentions
-  const parts = text.split(mentionRegex);
-  
-  if (parts.length <= 1) {
-    return <span>{text}</span>;
-  }
-  
-  // Rebuild the text with styled mentions
-  const result: JSX.Element[] = [];
-  let i = 0;
-  
-  // Process each part
-  while (i < parts.length) {
-    // Add the text before the mention
-    if (parts[i]) {
-      result.push(<span key={`text-${i}`}>{parts[i]}</span>);
-    }
-    
-    // Add the mention if there is one
-    if (i + 1 < parts.length) {
-      result.push(
-        <span 
-          key={`mention-${i}`} 
-          className="bg-blue-100 text-blue-800 px-1 rounded font-medium"
-        >
-          @{parts[i + 1]}
-        </span>
-      );
-      i += 2; // Skip the mention part
-    } else {
-      i++;
-    }
-  }
-  
-  return <>{result}</>;
-};
 
 // TODO: REFACTOR THIS TO SUPPORT ANY ACTIVITY TYPE, IT'S A MESS!
 
 export function IncidentActivityItem({ activity }: { activity: any }) {
+  const { data: users = [] } = useUsers();
+  
   const title =
     typeof activity.initiator === "string"
       ? activity.initiator
       : activity.initiator?.name;
+      
   const subTitle =
     activity.type === "comment"
       ? " Added a comment. "
       : activity.type === "statuschange"
       ? " Incident status changed. "
+      : activity.type === "assign"
+      ? " Incident assigned. "
       : activity.initiator?.status === "firing"
       ? " triggered"
       : " resolved" + ". ";
+      
+  // Function to render mentions in comment text
+  const renderCommentWithMentions = (text: string) => {
+    if (!text) return null;
+    
+    // Split the text by @mentions pattern
+    const parts = text.split(/(@[\w.]+)/g);
+    
+    return parts.map((part, index) => {
+      if (part.startsWith('@')) {
+        const userEmail = part.substring(1);
+        const user = users.find(u => u.email === userEmail);
+        
+        return (
+          <span key={index} className="bg-blue-100 text-blue-800 px-1 rounded">
+            {part}
+          </span>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
+  
   return (
     <div className="relative h-full w-full flex flex-col">
       <div className="flex items-center gap-2">
@@ -78,7 +63,7 @@ export function IncidentActivityItem({ activity }: { activity: any }) {
       {activity.text && (
         <div className="font-light text-gray-800">
           {activity.type === "comment" 
-            ? formatCommentWithMentions(activity.text)
+            ? renderCommentWithMentions(activity.text)
             : activity.text
           }
         </div>

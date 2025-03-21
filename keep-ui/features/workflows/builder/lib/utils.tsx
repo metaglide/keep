@@ -53,6 +53,18 @@ const intervalTriggerTemplate: V2StepTrigger = {
   },
 };
 
+const userAssignedTriggerTemplate: V2StepTrigger = {
+  type: "user_assigned",
+  componentType: "trigger",
+  name: "User Assigned",
+  id: "user_assigned",
+  properties: {
+    user_assigned: {
+      source: "",
+    },
+  },
+};
+
 export const getTriggerTemplate = (triggerType: string) => {
   if (triggerType === "manual") {
     return manualTriggerTemplate;
@@ -66,10 +78,13 @@ export const getTriggerTemplate = (triggerType: string) => {
   if (triggerType === "interval") {
     return intervalTriggerTemplate;
   }
+  if (triggerType === "user_assigned") {
+    return userAssignedTriggerTemplate;
+  }
   throw new Error(`Trigger type ${triggerType} is not supported`);
 };
 
-export const triggerTypes = ["manual", "alert", "incident", "interval"];
+export const triggerTypes = ["manual", "alert", "incident", "interval", "user_assigned"];
 
 export const foreachTemplate: Omit<V2StepForeach, "id"> = {
   type: "foreach",
@@ -152,6 +167,7 @@ export function getToolboxConfiguration(
           alertTriggerTemplate,
           incidentTriggerTemplate,
           intervalTriggerTemplate,
+          userAssignedTriggerTemplate,
         ],
       },
       {

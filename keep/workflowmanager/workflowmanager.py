@@ -14,6 +14,7 @@ from keep.api.core.db import (
 from keep.api.core.metrics import workflow_execution_duration
 from keep.api.models.alert import AlertDto, AlertSeverity
 from keep.api.models.incident import IncidentDto
+from keep.api.models.workflow_trigger_types import TriggerType
 from keep.identitymanager.identitymanagerfactory import IdentityManagerTypes
 from keep.providers.providers_factory import ProviderConfigurationException
 from keep.workflowmanager.workflow import Workflow
@@ -532,3 +533,141 @@ class WorkflowManager:
                 raise
 
         return workflows_errors
+
+    def insert_user_assigned_event(self, tenant_id: str, data: dict):
+        """
+        Insert a user_assigned event into the workflow manager.
+        This is triggered when a user is mentioned in a comment.
+        
+        Args:
+            tenant_id (str): The tenant ID
+            data (dict): Data containing information about the mention
+                - incident_id: The ID of the incident
+                - comment_id: The ID of the comment
+                - mentioned_user: The user who was mentioned
+                - mentioned_by: The user who mentioned
+        """
+        self.logger.info(
+            "Processing user_assigned event",
+            extra={
+                "tenant_id": tenant_id,
+                "data": data,
+            },
+        )
+        
+        all_workflow_models = self.workflow_store.get_all_workflows(tenant_id)
+        self.logger.info(
+            "Got all workflows",
+            extra={
+                "num_of_workflows": len(all_workflow_models),
+            },
+        )
+        
+        for workflow_model in all_workflow_models:
+            if workflow_model.is_disabled:
+                self.logger.debug(
+                    f"Skipping the workflow: id={workflow_model.id}, name={workflow_model.name}, "
+                    f"tenant_id={workflow_model.tenant_id} - Workflow is disabled."
+                )
+                continue
+                
+            workflow = self._get_workflow_from_store(tenant_id, workflow_model)
+            if workflow is None:
+                continue
+                
+            # Check if the workflow has a user_assigned trigger
+            user_assigned_triggers = [
+                trigger for trigger in workflow.workflow_triggers
+                if trigger.get("type") == TriggerType.USER_ASSIGNED
+            ]
+            
+            if not user_assigned_triggers:
+                self.logger.debug(
+                    f"Workflow {workflow_model.id} does not have a user_assigned trigger, skipping"
+                )
+                continue
+                
+            for trigger in user_assigned_triggers:
+                should_run = True
+                
+                # Apply filters if any
+                for filter in trigger.get("filters", []):
+                    filter_key = filter.get("key")
+                    filter_val = filter.get("value")
+                    filter_exclude = filter.get("exclude", False)
+                    
+                    # Handle special filter keys for user_assigned events
+                    if filter_key == "assignee_id":
+                        event_val = data.get("mentioned_user")
+                    elif filter_key == "incident_id":
+                        event_val = data.get("incident_id")
+                    elif filter_key == "comment_text":
+                        # This would require fetching the comment text
+                        # For now, we'll skip this filter
+                        continue
+                    else:
+                        event_val = data.get(filter_key)
+                        
+                    if event_val is None:
+                        self.logger.debug(
+                            f"Failed to run filter {filter_key}, skipping the event",
+                            extra={
+                                "tenant_id": tenant_id,
+                                "filter_key": filter_key,
+                                "filter_val": filter_val,
+                                "workflow_id": workflow_model.id,
+                            },
+                        )
+                        should_run = False
+                        break
+                        
+                    # Apply the filter
+                    filter_applied = self._apply_filter(filter_val, event_val)
+                    if not filter_applied and not filter_exclude:
+                        self.logger.debug(
+                            f"Filter {filter_key} didn't match, skipping",
+                            extra={
+                                "filter_key": filter_key,
+                                "filter_val": filter_val,
+                                "event_val": event_val,
+                            },
+                        )
+                        should_run = False
+                        break
+                    elif filter_applied and filter_exclude:
+                        self.logger.debug(
+                            f"Filter {filter_key} matched but it's exclusion filter, skipping",
+                            extra={
+                                "filter_key": filter_key,
+                                "filter_val": filter_val,
+                                "event_val": event_val,
+                            },
+                        )
+                        should_run = False
+                        break
+                
+                if not should_run:
+                    self.logger.debug("Skipping the workflow due to filter mismatch")
+                    continue
+                
+                # If we get here, the workflow should run
+                self.logger.info(
+                    f"Adding workflow {workflow_model.id} to run for user_assigned event",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "workflow_id": workflow_model.id,
+                        "data": data,
+                    },
+                )
+                
+                with self.scheduler.lock:
+                    self.scheduler.workflows_to_run.append(
+                        {
+                            "workflow": workflow,
+                            "workflow_id": workflow_model.id,
+                            "tenant_id": tenant_id,
+                            "triggered_by": f"user_assigned:{data.get('mentioned_user')}",
+                            "event": data,
+                        }
+                    )
+                self.logger.info("Workflow added to run")

@@ -2,6 +2,50 @@ import AlertSeverity from "@/app/(keep)/alerts/alert-severity";
 import { AlertDto } from "@/entities/alerts/model";
 import TimeAgo from "react-timeago";
 
+// Function to format comment text with styled mentions
+const formatCommentWithMentions = (text: string) => {
+  if (!text) return null;
+  
+  // Regular expression to find @mentions
+  const mentionRegex = /@([a-zA-Z0-9_\.]+)/g;
+  
+  // Split the text by mentions
+  const parts = text.split(mentionRegex);
+  
+  if (parts.length <= 1) {
+    return <span>{text}</span>;
+  }
+  
+  // Rebuild the text with styled mentions
+  const result: JSX.Element[] = [];
+  let i = 0;
+  
+  // Process each part
+  while (i < parts.length) {
+    // Add the text before the mention
+    if (parts[i]) {
+      result.push(<span key={`text-${i}`}>{parts[i]}</span>);
+    }
+    
+    // Add the mention if there is one
+    if (i + 1 < parts.length) {
+      result.push(
+        <span 
+          key={`mention-${i}`} 
+          className="bg-blue-100 text-blue-800 px-1 rounded font-medium"
+        >
+          @{parts[i + 1]}
+        </span>
+      );
+      i += 2; // Skip the mention part
+    } else {
+      i++;
+    }
+  }
+  
+  return <>{result}</>;
+};
+
 // TODO: REFACTOR THIS TO SUPPORT ANY ACTIVITY TYPE, IT'S A MESS!
 
 export function IncidentActivityItem({ activity }: { activity: any }) {
@@ -32,7 +76,12 @@ export function IncidentActivityItem({ activity }: { activity: any }) {
         </span>
       </div>
       {activity.text && (
-        <div className="font-light text-gray-800">{activity.text}</div>
+        <div className="font-light text-gray-800">
+          {activity.type === "comment" 
+            ? formatCommentWithMentions(activity.text)
+            : activity.text
+          }
+        </div>
       )}
     </div>
   );

@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useAlerts } from "./useAlerts";
 import { useApi } from "@/shared/lib/hooks/useApi";
 import { v4 as uuidv4 } from "uuid";
+import { toast } from "react-toastify";
 import {
   DEFAULT_INCIDENTS_PAGE_SIZE,
   DEFAULT_INCIDENTS_SORTING,
@@ -160,12 +161,31 @@ export const usePollIncidentComments = (incidentId: string) => {
     },
     [mutateIncidentActivity]
   );
+  
+  const handleUserMention = useCallback(
+    (data: any) => {
+      if (data.incident_id === incidentId) {
+        mutateIncidentActivity();
+        
+        if (typeof window !== 'undefined') {
+          toast.info(`${data.mentioned_by} mentioned ${data.mentioned_user} in a comment`, {
+            position: "top-right",
+            autoClose: 5000,
+          });
+        }
+      }
+    },
+    [incidentId, mutateIncidentActivity]
+  );
+  
   useEffect(() => {
     bind("incident-comment", handleIncoming);
+    bind("user-mentioned", handleUserMention);
     return () => {
       unbind("incident-comment", handleIncoming);
+      unbind("user-mentioned", handleUserMention);
     };
-  }, [bind, unbind, handleIncoming]);
+  }, [bind, unbind, handleIncoming, handleUserMention]);
 };
 
 export const usePollIncidentAlerts = (incidentId: string) => {
@@ -196,7 +216,7 @@ export const usePollIncidents = (
   const handleIncoming = useCallback(
     (data: any) => {
       mutateIncidents();
-      setIncidentChangeToken(uuidv4()); // changes every time incident change happens on the server
+      setIncidentChangeToken(uuidv4());
     },
     [mutateIncidents, setIncidentChangeToken]
   );

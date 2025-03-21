@@ -43,6 +43,7 @@ from keep.api.core.incidents import (
     get_incident_facets,
     get_incident_facets_data,
     get_incident_potential_facet_fields,
+    get_last_incidents_by_cel,
 )
 from keep.api.models.action_type import ActionType
 from keep.api.models.alert import AlertDto, EnrichIncidentRequestBody
@@ -80,6 +81,168 @@ from keep.workflowmanager.workflowmanager import WorkflowManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+@router.get("", description="Get incidents")
+def get_incidents(
+    limit: int = Query(20, description="Number of incidents to return"),
+    offset: int = Query(0, description="Offset for pagination"),
+    sorting: str = Query("-creation_time", description="Sorting field with optional - prefix for descending"),
+    cel: str = Query(None, description="CEL filter expression"),
+    candidate: bool = Query(None, description="Filter by candidate status"),
+    predicted: bool = Query(None, description="Filter by predicted status"),
+    authenticated_entity: AuthenticatedEntity = Depends(
+        IdentityManagerFactory.get_auth_verifier(["read:incident"])
+    ),
+    session: Session = Depends(get_session),
+) -> IncidentsPaginatedResultsDto:
+    tenant_id = authenticated_entity.tenant_id
+    
+    # Parse sorting parameter
+    sort_field = sorting.lstrip("-")
+    sort_desc = sorting.startswith("-")
+    incident_sorting = IncidentSorting(id=sort_field, desc=sort_desc)
+    
+    try:
+        # Get incidents using the core function
+        incidents, total_count = get_last_incidents_by_cel(
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            is_candidate=candidate,
+            is_predicted=predicted,
+            sorting=incident_sorting,
+            cel=cel,
+            with_alerts=True,
+        )
+        
+        # Convert DB incidents to DTOs
+        incident_dtos = [IncidentDto.from_db_incident(incident) for incident in incidents]
+        
+        return IncidentsPaginatedResultsDto(
+            data=incident_dtos,
+            total=total_count,
+            limit=limit,
+            offset=offset
+        )
+    except CelToSqlException as e:
+        logger.error(f"Error in CEL to SQL conversion: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid CEL expression: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error getting incidents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting incidents: {str(e)}")
+
+@router.get("/meta", description="Get incidents metadata")
+def get_incidents_meta(
+    authenticated_entity: AuthenticatedEntity = Depends(
+        IdentityManagerFactory.get_auth_verifier(["read:incident"])
+    ),
+    session: Session = Depends(get_session),
+):
+    tenant_id = authenticated_entity.tenant_id
+    
+    try:
+        # Get incidents metadata
+        incidents_meta = get_incidents_meta_for_tenant(tenant_id, session)
+        
+        return incidents_meta
+    except Exception as e:
+        logger.error(f"Error getting incidents metadata: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting incidents metadata: {str(e)}")
+
+@router.get("/{incident_id}", description="Get incident by ID")
+def get_incident_by_id_endpoint(
+    incident_id: UUID,
+    authenticated_entity: AuthenticatedEntity = Depends(
+        IdentityManagerFactory.get_auth_verifier(["read:incident"])
+    ),
+    session: Session = Depends(get_session),
+) -> IncidentDto:
+    tenant_id = authenticated_entity.tenant_id
+    
+    try:
+        # Get incident by ID
+        incident = get_incident_by_id(tenant_id, str(incident_id), session)
+        
+        if not incident:
+            raise HTTPException(status_code=404, detail=f"Incident with ID {incident_id} not found")
+        
+        # Convert DB incident to DTO
+        incident_dto = IncidentDto.from_db_incident(incident)
+        
+        return incident_dto
+    except Exception as e:
+        logger.error(f"Error getting incident by ID: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting incident by ID: {str(e)}")
+
+@router.get("/{incident_id}/alerts", description="Get alerts for an incident")
+def get_incident_alerts(
+    incident_id: UUID,
+    limit: int = Query(20, description="Number of alerts to return"),
+    offset: int = Query(0, description="Offset for pagination"),
+    authenticated_entity: AuthenticatedEntity = Depends(
+        IdentityManagerFactory.get_auth_verifier(["read:incident"])
+    ),
+    session: Session = Depends(get_session),
+) -> AlertWithIncidentLinkMetadataPaginatedResultsDto:
+    tenant_id = authenticated_entity.tenant_id
+    
+    try:
+        # Get incident alerts
+        alerts, total_count = get_incident_alerts_and_links_by_incident_id(
+            tenant_id=tenant_id,
+            incident_id=str(incident_id),
+            limit=limit,
+            offset=offset,
+            session=session
+        )
+        
+        # Convert DB alerts to DTOs
+        alert_dtos = convert_db_alerts_to_dto_alerts(alerts)
+        
+        return AlertWithIncidentLinkMetadataPaginatedResultsDto(
+            data=alert_dtos,
+            total=total_count,
+            limit=limit,
+            offset=offset
+        )
+    except Exception as e:
+        logger.error(f"Error getting alerts for incident: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting alerts for incident: {str(e)}")
+
+@router.get("/{incident_id}/workflows", description="Get workflow executions for an incident")
+def get_incident_workflow_executions(
+    incident_id: UUID,
+    limit: int = Query(20, description="Number of workflow executions to return"),
+    offset: int = Query(0, description="Offset for pagination"),
+    authenticated_entity: AuthenticatedEntity = Depends(
+        IdentityManagerFactory.get_auth_verifier(["read:incident"])
+    ),
+    session: Session = Depends(get_session),
+) -> WorkflowExecutionsPaginatedResultsDto:
+    tenant_id = authenticated_entity.tenant_id
+    
+    try:
+        # Get workflow executions for incident
+        workflow_executions, total_count = get_workflow_executions_for_incident_or_alert(
+            tenant_id=tenant_id,
+            incident_id=str(incident_id),
+            limit=limit,
+            offset=offset,
+            session=session
+        )
+        
+        # Convert DB workflow executions to DTOs
+        workflow_execution_dtos = [WorkflowExecutionDTO.from_orm(wf) for wf in workflow_executions]
+        
+        return WorkflowExecutionsPaginatedResultsDto(
+            data=workflow_execution_dtos,
+            total=total_count,
+            limit=limit,
+            offset=offset
+        )
+    except Exception as e:
+        logger.error(f"Error getting workflow executions for incident: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting workflow executions for incident: {str(e)}")
 
 @router.post("/{incident_id}/comment", description="Add incident audit activity")
 def add_comment(

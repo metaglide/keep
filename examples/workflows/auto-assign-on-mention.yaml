@@ -1,0 +1,33 @@
+workflow:
+  id: auto-assign-on-mention
+  name: Auto-assign on Mention
+  description: Assigns incidents to users when they are mentioned with @user take
+  triggers:
+    - type: user_assigned
+      filters:
+        - key: comment_text
+          value: r"@(\w+)\s+take"  # Match comments with "@username take"
+  steps:
+    - name: get-user-details
+      provider:
+        type: keep
+        with:
+          query: "SELECT * FROM users WHERE username = '{{ event.mentioned_user }}'"
+          single_row: true
+  actions:
+    - name: assign-incident
+      provider:
+        type: keep
+        with:
+          assign_incident:
+            incident_id: "{{ event.incident_id }}"
+            assignee: "{{ steps.get-user-details.results.id }}"
+    - name: notify-assignment
+      provider:
+        type: slack
+        config: "{{ providers.slack }}"
+        with:
+          channel: "#incidents"
+          message: |
+            Incident [{{ event.incident_id }}] has been assigned to @{{ event.mentioned_user }}
+            based on mention in comment.

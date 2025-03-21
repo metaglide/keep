@@ -102,6 +102,123 @@ class WorkflowManager:
                 },
             )
 
+    def insert_user_assigned_event(self, tenant_id: str, data: dict):
+        """
+        Insert a user_assigned event into the workflow manager.
+        This is triggered when a user is mentioned in a comment.
+        
+        Args:
+            tenant_id (str): The tenant ID
+            data (dict): Data about the mention including:
+                - incident_id: The incident ID
+                - comment_id: The comment ID
+                - mentioned_user: The user who was mentioned
+                - mentioned_by: The user who mentioned
+                - comment_text: The full comment text
+        """
+        self.logger.info(
+            "Processing user_assigned event",
+            extra={
+                "tenant_id": tenant_id,
+                "data": data,
+            },
+        )
+        
+        all_workflow_models = self.workflow_store.get_all_workflows(tenant_id)
+        self.logger.info(
+            "Got all workflows",
+            extra={
+                "num_of_workflows": len(all_workflow_models),
+            },
+        )
+        
+        for workflow_model in all_workflow_models:
+            if workflow_model.is_disabled:
+                self.logger.debug(
+                    f"Skipping the workflow: id={workflow_model.id}, name={workflow_model.name}, "
+                    f"tenant_id={workflow_model.tenant_id} - Workflow is disabled."
+                )
+                continue
+                
+            workflow = self._get_workflow_from_store(tenant_id, workflow_model)
+            if workflow is None:
+                continue
+                
+            # Check if the workflow has a user_assigned trigger
+            user_assigned_triggers = []
+            for trigger in workflow.workflow_triggers or []:
+                if trigger.get("type") == "user_assigned":
+                    user_assigned_triggers.append(trigger)
+            
+            if not user_assigned_triggers:
+                self.logger.debug(
+                    f"Workflow {workflow_model.id} does not have user_assigned triggers, skipping"
+                )
+                continue
+                
+            # Check if the workflow should be triggered based on filters
+            should_run = False
+            for trigger in user_assigned_triggers:
+                should_run = True  # Default to run unless a filter excludes it
+                
+                # Apply filters if any
+                for filter in trigger.get("filters", []):
+                    filter_key = filter.get("key")
+                    filter_val = filter.get("value")
+                    filter_exclude = filter.get("exclude", False)
+                    
+                    # Get the value from the data
+                    if filter_key in data:
+                        event_val = data[filter_key]
+                        
+                        # Apply the filter
+                        filter_applied = self._apply_filter(filter_val, event_val)
+                        
+                        # If filter doesn't match and it's not an exclusion filter, don't run
+                        if not filter_applied and not filter_exclude:
+                            should_run = False
+                            break
+                            
+                        # If filter matches and it's an exclusion filter, don't run
+                        if filter_applied and filter_exclude:
+                            should_run = False
+                            break
+                    else:
+                        # If the filter key doesn't exist in the data, don't run
+                        should_run = False
+                        break
+                
+                # If this trigger should run, no need to check other triggers
+                if should_run:
+                    break
+            
+            if not should_run:
+                self.logger.debug(f"Workflow {workflow_model.id} filters didn't match, skipping")
+                continue
+                
+            # Add the workflow to run
+            self.logger.info(
+                f"Adding workflow {workflow_model.id} to run for user_assigned event",
+                extra={
+                    "workflow_id": workflow_model.id,
+                    "tenant_id": tenant_id,
+                    "data": data,
+                },
+            )
+            
+            with self.scheduler.lock:
+                self.scheduler.workflows_to_run.append(
+                    {
+                        "workflow": workflow,
+                        "workflow_id": workflow_model.id,
+                        "tenant_id": tenant_id,
+                        "triggered_by": "user_assigned",
+                        "event": data,  # Pass the data as the event
+                    }
+                )
+            
+            self.logger.info(f"Workflow {workflow_model.id} added to run")
+
     def insert_incident(self, tenant_id: str, incident: IncidentDto, trigger: str):
         all_workflow_models = self.workflow_store.get_all_workflows(tenant_id)
         self.logger.info(
@@ -155,198 +272,6 @@ class WorkflowManager:
                     }
                 )
             self.logger.info("Workflow added to run")
-
-    def insert_events(self, tenant_id, events: typing.List[AlertDto | IncidentDto]):
-        for event in events:
-            self.logger.info("Getting all workflows")
-            all_workflow_models = self.workflow_store.get_all_workflows(tenant_id)
-            self.logger.info(
-                "Got all workflows",
-                extra={
-                    "num_of_workflows": len(all_workflow_models),
-                },
-            )
-            for workflow_model in all_workflow_models:
-
-                if workflow_model.is_disabled:
-                    self.logger.debug(
-                        f"Skipping the workflow: id={workflow_model.id}, name={workflow_model.name}, "
-                        f"tenant_id={workflow_model.tenant_id} - Workflow is disabled."
-                    )
-                    continue
-                workflow = self._get_workflow_from_store(tenant_id, workflow_model)
-                if workflow is None:
-                    continue
-
-                for trigger in workflow.workflow_triggers:
-                    # TODO: handle it better
-                    if not trigger.get("type") == "alert":
-                        self.logger.debug("trigger type is not alert, skipping")
-                        continue
-                    should_run = True
-                    # apply filters
-                    for filter in trigger.get("filters", []):
-                        # TODO: more sophisticated filtering/attributes/nested, etc
-                        self.logger.debug(f"Running filter {filter}")
-                        filter_key = filter.get("key")
-                        filter_val = filter.get("value")
-                        filter_exclude = filter.get("exclude", False)
-                        event_val = self._get_event_value(event, filter_key)
-                        self.logger.debug(
-                            "Filtering",
-                            extra={
-                                "filter_key": filter_key,
-                                "filter_val": filter_val,
-                                "event": event,
-                            },
-                        )
-                        if event_val is None:
-                            self.logger.debug(
-                                "Failed to run filter, skipping the event. This may happen if the event does not have the filter_key as attribute.",
-                                extra={
-                                    "tenant_id": tenant_id,
-                                    "filter_key": filter_key,
-                                    "filter_val": filter_val,
-                                    "workflow_id": workflow_model.id,
-                                },
-                            )
-                            should_run = False
-                            continue
-                        # if its list, check if the filter is in the list
-                        if isinstance(event_val, list):
-                            for val in event_val:
-                                # if one filter applies, it should run
-                                if self._apply_filter(filter_val, val):
-                                    self.logger.debug(
-                                        "Filter matched, running",
-                                        extra={
-                                            "filter_key": filter_key,
-                                            "filter_val": filter_val,
-                                            "event": event,
-                                        },
-                                    )
-                                    # depends on the exclude flag
-                                    if filter_exclude:
-                                        should_run = False
-                                    else:
-                                        should_run = True
-                                    break
-                                self.logger.debug(
-                                    "Filter didn't match, skipping",
-                                    extra={
-                                        "filter_key": filter_key,
-                                        "filter_val": filter_val,
-                                        "event": event,
-                                    },
-                                )
-                                if not filter_exclude:
-                                    should_run = False
-                        # elif the filter is string/int/float, compare them:
-                        elif type(event_val) in [int, str, float, bool]:
-                            filter_applied = self._apply_filter(filter_val, event_val)
-                            if not filter_applied and not filter_exclude:
-                                self.logger.debug(
-                                    "Filter didn't match, skipping",
-                                    extra={
-                                        "filter_key": filter_key,
-                                        "filter_val": filter_val,
-                                        "event": event,
-                                    },
-                                )
-                                should_run = False
-                                break
-                            # if the filter applies but its exclusion filter, don't run
-                            elif filter_applied and filter_exclude:
-                                self.logger.debug(
-                                    "Filter matched but it's exclusion filter, skipping",
-                                    extra={
-                                        "filter_key": filter_key,
-                                        "filter_val": filter_val,
-                                        "event": event,
-                                    },
-                                )
-                                should_run = False
-                        # other types currently does not supported
-                        else:
-                            self.logger.warning(
-                                "Could not run the filter on unsupported type, skipping the event. Probably misconfigured workflow."
-                            )
-                            should_run = False
-                            break
-
-                    if not should_run:
-                        self.logger.debug("Skipping the workflow")
-                        continue
-                    # enrich the alert with more data
-                    self.logger.info("Found a workflow to run")
-                    event.trigger = "alert"
-                    # prepare the alert with the enrichment
-                    self.logger.info("Enriching alert")
-                    alert_enrichment = get_enrichment(tenant_id, event.fingerprint)
-                    if alert_enrichment:
-                        for k, v in alert_enrichment.enrichments.items():
-                            setattr(event, k, v)
-                    self.logger.info("Alert enriched")
-                    # apply only_on_change (https://github.com/keephq/keep/issues/801)
-                    fields_that_needs_to_be_change = trigger.get("only_on_change", [])
-                    severity_changed = trigger.get("severity_changed", False)
-                    # if there are fields that needs to be changed, get the previous alert
-                    if fields_that_needs_to_be_change or severity_changed:
-                        previous_alert = get_previous_alert_by_fingerprint(
-                            tenant_id, event.fingerprint
-                        )
-                        if severity_changed:
-                            fields_that_needs_to_be_change.append("severity")
-                        # now compare:
-                        #   (no previous alert means that the workflow should run)
-                        if previous_alert:
-                            for field in fields_that_needs_to_be_change:
-                                # the field hasn't change
-                                if getattr(event, field) == previous_alert.event.get(
-                                    field
-                                ):
-                                    self.logger.info(
-                                        "Skipping the workflow because the field hasn't change",
-                                        extra={
-                                            "field": field,
-                                            "event": event,
-                                            "previous_alert": previous_alert,
-                                        },
-                                    )
-                                    should_run = False
-                                    break
-                            if should_run and severity_changed:
-                                setattr(event, "severity_changed", True)
-                                setattr(
-                                    event,
-                                    "previous_severity",
-                                    previous_alert.event.get("severity"),
-                                )
-                                previous_severity = AlertSeverity(
-                                    previous_alert.event.get("severity")
-                                )
-                                current_severity = AlertSeverity(event.severity)
-                                if previous_severity < current_severity:
-                                    setattr(event, "severity_change", "increased")
-                                else:
-                                    setattr(event, "severity_change", "decreased")
-
-                    if not should_run:
-                        continue
-                    # Lastly, if the workflow should run, add it to the scheduler
-                    self.logger.info("Adding workflow to run")
-                    with self.scheduler.lock:
-                        self.scheduler.workflows_to_run.append(
-                            {
-                                "workflow": workflow,
-                                "workflow_id": workflow_model.id,
-                                "tenant_id": tenant_id,
-                                "triggered_by": "alert",
-                                "event": event,
-                            }
-                        )
-                    self.logger.info("Workflow added to run")
-            self.logger.info("All workflows added to run")
 
     def _get_event_value(self, event, filter_key):
         # if the filter key is a nested key, get the value

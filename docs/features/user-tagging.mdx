@@ -1,0 +1,123 @@
+# User Tagging in Incident Comments
+
+Keep allows you to mention users in incident comments using the `@username` syntax. This feature enables better collaboration and communication within your team.
+
+## How to Use User Tagging
+
+1. Navigate to an incident detail page
+2. In the activity tab, find the comment input field
+3. Type `@` to see a dropdown of available users
+4. Select a user from the dropdown to mention them
+5. Submit your comment
+
+When a user is mentioned in a comment:
+- The mention is highlighted in the comment text
+- The mentioned user receives a notification
+- Workflows with the `user_assigned` trigger can be executed
+
+## Workflow Integration
+
+You can create workflows that trigger when a user is mentioned in a comment. This allows for powerful automation scenarios such as:
+
+- Automatically assigning incidents to mentioned users
+- Sending notifications to external systems
+- Creating tickets in other platforms
+- Escalating incidents based on mentions
+
+### Example: User Mention Notification
+
+```yaml
+workflow:
+  id: user-mention-notification
+  name: User Mention Notification
+  description: Sends notifications when users are mentioned in incident comments
+  triggers:
+    - type: user_assigned
+      filters:
+        - key: incident_id
+          value: r".*"  # Match any incident ID
+  actions:
+    - name: notify-slack
+      provider:
+        type: slack
+        config: "{{ providers.slack }}"
+        with:
+          channel: "#incident-mentions"
+          message: |
+            User @{{ event.mentioned_user }} was mentioned in incident [{{ event.incident_id }}]
+            
+            **Comment:**
+            {{ event.comment_text }}
+            
+            **Mentioned by:** {{ event.mentioned_by }}
+```
+
+### Example: Auto-assign on Mention
+
+```yaml
+workflow:
+  id: auto-assign-on-mention
+  name: Auto-assign on Mention
+  description: Assigns incidents to users when they are mentioned with @user take
+  triggers:
+    - type: user_assigned
+      filters:
+        - key: comment_text
+          value: r"@(\w+)\s+take"  # Match comments with "@username take"
+  steps:
+    - name: get-user-details
+      provider:
+        type: keep
+        with:
+          query: "SELECT * FROM users WHERE username = '{{ event.mentioned_user }}'"
+          single_row: true
+  actions:
+    - name: assign-incident
+      provider:
+        type: keep
+        with:
+          assign_incident:
+            incident_id: "{{ event.incident_id }}"
+            assignee: "{{ steps.get-user-details.results.id }}"
+    - name: notify-assignment
+      provider:
+        type: slack
+        config: "{{ providers.slack }}"
+        with:
+          channel: "#incidents"
+          message: |
+            Incident [{{ event.incident_id }}] has been assigned to @{{ event.mentioned_user }}
+            based on mention in comment.
+```
+
+## User Assigned Trigger
+
+The `user_assigned` trigger type is used to trigger workflows when a user is mentioned in a comment. The trigger provides the following data:
+
+| Field | Description |
+|-------|-------------|
+| `incident_id` | The ID of the incident where the comment was made |
+| `comment_id` | The ID of the comment containing the mention |
+| `mentioned_user` | The user who was mentioned (email/username) |
+| `mentioned_by` | The user who made the comment (email/username) |
+| `comment_text` | The full text of the comment |
+
+### Filtering Mentions
+
+You can use filters to trigger workflows only for specific mentions:
+
+```yaml
+triggers:
+  - type: user_assigned
+    filters:
+      - key: mentioned_user
+        value: "oncall@example.com"  # Only trigger for this user
+      - key: comment_text
+        value: r"urgent|critical"  # Only trigger if comment contains these words
+```
+
+## Technical Details
+
+User mentions are detected using the regular expression `@([a-zA-Z0-9_\.]+)` which matches the @ symbol followed by letters, numbers, underscores, and periods.
+
+Mentions are stored in the database and can be queried for reporting and analytics purposes.

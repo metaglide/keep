@@ -71,6 +71,27 @@ triggers:
       - update
 ```
 
+### User Assigned Trigger
+
+Executes a workflow when a user is mentioned in an incident comment using the @username syntax.
+
+```yaml
+triggers:
+  - type: user_assigned
+    filters:
+      - key: mentioned_user
+        value: "john.doe"  # Only trigger when john.doe is mentioned
+      - key: comment_text
+        value: r".*urgent.*"  # Only trigger when comment contains "urgent"
+```
+
+Available filter keys:
+- `incident_id`: The ID of the incident where the comment was made
+- `comment_id`: The ID of the comment containing the mention
+- `mentioned_user`: The username of the mentioned user
+- `mentioned_by`: The username of the user who made the mention
+- `comment_text`: The full text of the comment
+
 ### Field Change Trigger
 
 Executes a workflow when specific fields in an alert change, such as status or severity.

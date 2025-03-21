@@ -1,0 +1,23 @@
+workflow:
+  id: user-mention-notification
+  name: User Mention Notification
+  description: Sends notifications when users are mentioned in incident comments
+  triggers:
+    - type: user_assigned
+      filters:
+        - key: incident_id
+          value: r".*"  # Match any incident ID
+  actions:
+    - name: notify-slack
+      provider:
+        type: slack
+        config: "{{ providers.slack }}"
+        with:
+          channel: "#incident-mentions"
+          message: |
+            User @{{ event.mentioned_user }} was mentioned in incident [{{ event.incident_id }}]
+            
+            **Comment:**
+            {{ event.comment_text }}
+            
+            **Mentioned by:** {{ event.mentioned_by }}

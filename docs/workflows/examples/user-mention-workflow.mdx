@@ -1,0 +1,139 @@
+---
+title: "User Mention Workflow"
+---
+
+# User Mention Workflow Example
+
+This example demonstrates how to create a workflow that is triggered when a user is mentioned in an incident comment.
+
+## Use Case
+
+When a user is mentioned in an incident comment, you might want to:
+- Send a notification to a specific channel
+- Create a ticket in an external system
+- Assign the incident to the mentioned user
+- Send an email to the mentioned user
+
+## Workflow Definition
+
+```yaml
+workflow:
+  id: user-mention-notification
+  name: User Mention Notification
+  description: Sends notifications when users are mentioned in incident comments
+  triggers:
+    - type: user_assigned
+      filters:
+        - key: incident_id
+          value: r".*"  # Match any incident ID
+  actions:
+    - name: notify-slack
+      provider:
+        type: slack
+        config: "{{ providers.slack }}"
+        with:
+          channel: "#incident-mentions"
+          message: |
+            User @{{ event.mentioned_user }} was mentioned in incident [{{ event.incident_id }}]
+            
+            **Comment:**
+            {{ event.comment_text }}
+            
+            **Mentioned by:** {{ event.mentioned_by }}
+```
+
+## Available Event Data
+
+When a user is mentioned in a comment, the following data is available in the `event` context:
+
+| Field | Description |
+|-------|-------------|
+| `incident_id` | The ID of the incident where the comment was made |
+| `comment_id` | The ID of the comment containing the mention |
+| `mentioned_user` | The username of the mentioned user |
+| `mentioned_by` | The username of the user who made the mention |
+| `comment_text` | The full text of the comment |
+
+## Filter Examples
+
+You can filter the workflow trigger based on various criteria:
+
+### Filter by specific user being mentioned
+
+```yaml
+filters:
+  - key: mentioned_user
+    value: "john.doe"  # Only trigger when john.doe is mentioned
+```
+
+### Filter by specific incident
+
+```yaml
+filters:
+  - key: incident_id
+    value: "INC-123"  # Only trigger for incident INC-123
+```
+
+### Filter by comment content
+
+```yaml
+filters:
+  - key: comment_text
+    value: r".*urgent.*"  # Only trigger when comment contains "urgent"
+```
+
+### Exclude certain users
+
+```yaml
+filters:
+  - key: mentioned_user
+    value: "bot-user"
+    exclude: true  # Don't trigger when bot-user is mentioned
+```
+
+## Advanced Example: Assign Incident to Mentioned User
+
+This workflow automatically assigns an incident to a user when they are mentioned with a specific keyword:
+
+```yaml
+workflow:
+  id: auto-assign-on-mention
+  name: Auto-assign on Mention
+  description: Assigns incidents to users when they are mentioned with @user take
+  triggers:
+    - type: user_assigned
+      filters:
+        - key: comment_text
+          value: r"@(\w+)\s+take"  # Match comments with "@username take"
+  steps:
+    - name: get-user-details
+      provider:
+        type: keep
+        with:
+          query: "SELECT * FROM users WHERE username = '{{ event.mentioned_user }}'"
+          single_row: true
+  actions:
+    - name: assign-incident
+      provider:
+        type: keep
+        with:
+          assign_incident:
+            incident_id: "{{ event.incident_id }}"
+            assignee: "{{ steps.get-user-details.results.id }}"
+    - name: notify-assignment
+      provider:
+        type: slack
+        config: "{{ providers.slack }}"
+        with:
+          channel: "#incidents"
+          message: |
+            Incident [{{ event.incident_id }}] has been assigned to @{{ event.mentioned_user }}
+            based on mention in comment.
+```
+
+## Implementation Notes
+
+1. The `user_assigned` trigger type is fired when a user is mentioned in a comment using the @username syntax
+2. The workflow engine parses mentions using the regex pattern `@([a-zA-Z0-9_]+)`
+3. Multiple users can be mentioned in a single comment, and each mention will trigger the workflow separately
+4. The workflow will only trigger for valid users that exist in the system
